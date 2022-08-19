@@ -19,7 +19,7 @@ class Important:
 
 # Minor functions.
 def cls(): os.system("cls || clear")
-def clearOneLine(line): print(f"\033[A{' ' * len(line)}\033[A")
+def clearOneLine(line): print(f"\033[1A{' ' * (len(line)+5)}\033[A")
 def OutputMesssage(message): print(message)
 
 
@@ -34,12 +34,14 @@ class Messages:
         unknown_command = "<server:unknown_command;"
         user_message = "<server:user_message|"
         connected = "<server:connected;"
+        handshake = "<server:handshake;"
 
     class ToServer:
         text_message = ">client:text_message|" 
         disconnect = ">client:disconnect"
         set_username = ">client:username|"
         silent_set_username = ">client:silent_username|"
+        handshake = ">client:handshake;"
 
 
     def SendMessage(msg):
@@ -60,19 +62,24 @@ def ServerMsgListener():
         _CommandsQueue = [x for x in _CommandsQueue if x]
 
         # Execute commands.
+        # print(_CommandsQueue)
         if _CommandsQueue != []:
             for command in _CommandsQueue:
-                
+
                 # Server response.
                 if command.startswith("<"):
 
                     # Connection confirmation.
-                    if command == Messages.FromServer.connected.replace(";",""):
+                    if command == Messages.FromServer.connected.replace(";", ""):
                         Important._Connected = True
 
                     # Message received confirmation.
                     if command == Messages.FromServer.message_received:
                         Messages._MessageReceived = True
+
+                    # Handshake auth process.
+                    if command == Messages.FromServer.handshake.replace(";", ""):
+                        Messages.SendMessage(Messages.ToServer.handshake)
 
                     # Another user message.
                     if command.startswith(Messages.FromServer.user_message):
@@ -114,7 +121,8 @@ def HandleInput(user_input):
 
     # Text message.
     else:
-        Messages.SendMessage(Messages.ToServer.text_message+user_input)
+        if not user_input.replace(" ","") == "":
+            Messages.SendMessage(Messages.ToServer.text_message+user_input)
 
 
 # Parse command.
@@ -196,7 +204,6 @@ class Menus:
 
                 # Connect to server.
                 Connect(HOST, PORT)
-
                 Menus.Online()
 
             if user_action_parsed[0] == "exit":
