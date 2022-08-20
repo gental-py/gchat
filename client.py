@@ -13,6 +13,7 @@ colors_setup()
 
 # Important switches.
 class Important:
+    _Prefix    = "@" # @=user | $=admin
     _Username  = "guest"
     _Connected = False
 
@@ -29,23 +30,36 @@ class Messages:
     FORMAT = "utf-8"
     _MessageReceived = False
 
-    class FromServer:
+    #TODO: command: permission: respond: amdin/user
+    class  FromServer:
         message_received = "<server:message_received;"
         unknown_command = "<server:unknown_command;"
         user_message = "<server:user_message|"
         connected = "<server:connected;"
         handshake = "<server:handshake;"
+        elevate_success = "<server:elevate_succes;"
+        elevate_failed = "<server:elevate_failed;" 
+        user_degrad = "<server:degrad;"
 
     class ToServer:
+        silent_set_username = ">client:silent_username|"
         text_message = ">client:text_message|" 
         disconnect = ">client:disconnect"
         set_username = ">client:username|"
-        silent_set_username = ">client:silent_username|"
         handshake = ">client:handshake;"
+        elevate = ">client:elevate|"
+        user_degrad = "<server:degrad;"
 
 
     def SendMessage(msg):
-        Socket.sendall(bytes(msg, Messages.FORMAT))
+        try:
+            Socket.sendall(bytes(msg, Messages.FORMAT))
+        except ConnectionResetError:
+            print(f"{red}SERVER CLOSED!{end}") 
+            Menus.Local_informationMessage = "Server has been closed."
+            Important._Connected = False
+            return
+
 
 
 # Server listener.
@@ -54,7 +68,16 @@ def ServerMsgListener():
     while True:
 
         # Receive message from server.
-        ServerMessage = Socket.recv(Messages.HEADER).decode(Messages.FORMAT)  
+        try:
+            ServerMessage = Socket.recv(Messages.HEADER).decode(Messages.FORMAT) 
+
+        # Server closed.
+        except ConnectionResetError:
+            print(f"{red}[rcv] SERVER CLOSED!{end}") 
+            Menus.Local_informationMessage = "Server has been closed."
+            Important._Connected = False
+            return
+            
 
         # Commands Queue.
         _CommandsQueue = []
@@ -62,7 +85,6 @@ def ServerMsgListener():
         _CommandsQueue = [x for x in _CommandsQueue if x]
 
         # Execute commands.
-        # print(_CommandsQueue)
         if _CommandsQueue != []:
             for command in _CommandsQueue:
 
@@ -81,12 +103,31 @@ def ServerMsgListener():
                     if command == Messages.FromServer.handshake.replace(";", ""):
                         Messages.SendMessage(Messages.ToServer.handshake)
 
+                    # Elevate to admin respond : FAILED.
+                    if command == Messages.FromServer.elevate_failed.replace(";", ""):
+                        OutputMesssage(f"{red}Bad admin password.{end}")
+
+                    # Elevate to admin respond : SUCCES.
+                    if command == Messages.FromServer.elevate_success.replace(";", ""):
+                        OutputMesssage(f"{green}You are now admin.{end} (Use ':' prefix for admin commands)")
+                        Important._Prefix = "$"
+
+                    # Permissions degradation.
+                    if command == Messages.FromServer.user_degrad:
+                        OutputMesssage(f"{red}You are not administrator anymore.{end}")
+                        Important._Prefix = "@"
+
                     # Another user message.
                     if command.startswith(Messages.FromServer.user_message):
                         content = command.replace(Messages.FromServer.user_message, "").split("@")
+                        prefix  = f"{cyan}@"
+                        if len(content) == 1:
+                            content = command.replace(Messages.FromServer.user_message, "").split("$")
+                            prefix = f"{red}$"
+
                         message = content[0]
                         username = content[1]
-                        OutputMesssage(f"{purple}@{username}{bold}: {blue}{message}{end}")
+                        OutputMesssage(f"{prefix}{purple}{username}{bold}: {blue}{message}{end}")
 
                 # Server text message.
                 else:
@@ -94,13 +135,13 @@ def ServerMsgListener():
 
 
 # Handle user input.
-def HandleInput(user_input):
+def HandleInput(user_input_STR):
 
-    # Commands.
-    if user_input.startswith("/"):
+    # User commands.
+    if user_input_STR.startswith("/"):
         
         # Parse user input.
-        user_input = CommandParse(user_input)
+        user_input = CommandParse(user_input_STR)
 
         # Disconnect user from server.
         if user_input[0] == "/disconnect":
@@ -111,18 +152,54 @@ def HandleInput(user_input):
         # Change username.
         if user_input[0] == "/setname":
             if len(user_input) != 2:
-                print(f"{red}Error:{end} Command <setname> requires exactly 1 parameter.")
+                print(f"{red}Error:{end} Command <setname> requires exactly 1 parameter: name.")
                 return
 
-            Messages.SendMessage(Messages.ToServer.set_username+user_input[1])
-            print(f"{cyan}@{user_input[1]}{bold}: {green}New username set!{end}")
-            Important._Username = user_input[1]
+            username = user_input[1].replace("@","").replace("$", "")
+
+            if len(username) > 24:
+                print(f"{red}Error:{end} <setname>: Parameter: name's max lenght is 24 characters!")
+                return
+
+            Messages.SendMessage(Messages.ToServer.set_username+username)
+            print(f"{cyan}{Important._Prefix}{username}{bold}: {green}New username set!{end}")
+            Important._Username = username
+
+        # Become admin.
+        if user_input[0] == "/elevate":
+            if Important._Prefix == "$":
+                print(f"{red}Error:{end} You are already admin!")
+                return
+
+            if len(user_input) != 2:
+                print(f"{red}Error:{end} Command <elevate> requires exactly 1 parameter: password.")
+                return
+
+            Messages.SendMessage(Messages.ToServer.elevate+user_input[1])
+
+
+    # Admin commands.
+    elif user_input_STR.startswith(":"):
+
+        # Check if user have admin permissions.
+        if Important._Prefix == "@":
+            print(f"{red}Error:{end} You cannot use admin commands as user!")
+            return
+
+        # Parse user input.
+        user_input = CommandParse(user_input_STR)
+
+        # Degrad back to user.
+        if user_input[0] == ":deladmin":
+            Important._Prefix = "@"
+            Messages.SendMessage(Messages.ToServer.user_degrad)
+            print(f"{orange}You are not admin anymore.{end}")
 
 
     # Text message.
     else:
-        if not user_input.replace(" ","") == "":
-            Messages.SendMessage(Messages.ToServer.text_message+user_input)
+        if not user_input_STR.replace(" ","") == "":
+            Messages.SendMessage(Messages.ToServer.text_message+user_input_STR)
 
 
 # Parse command.
@@ -146,6 +223,8 @@ def CommandParse(string):
 
 # Connect client to server.
 def Connect(host, port):
+    global Socket
+
     try:
         Socket.connect((host, port))
         Thread(target=ServerMsgListener, daemon=True).start()
@@ -162,7 +241,7 @@ def Connect(host, port):
         if "10038" in error:
             error = "Socket error."
 
-        Menus.Main(error)
+        Menus.Local_informationMessage = error
          
 
 # === Main === #
@@ -170,10 +249,17 @@ PORT = 8080
 HOST = "127.0.0.1"
 Socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
+def RecreateSocket():
+    global Socket
+    Socket.close()
+    Socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    Menus.Local_informationMessage = "Recreated socket."
+
 class Menus:
-    def Main(startmsg=""):
+    Local_informationMessage = ""
+    def Local():
         global HOST, PORT, Socket
-        output_host, output_port, message = "127.0.0.1", 8080, startmsg
+        output_host, output_port, message = "127.0.0.1", 8080, Menus.Local_informationMessage
 
         while True:
 
@@ -184,37 +270,66 @@ class Menus:
     {gray}├ {purple}Host{bold}: {red}{output_host}
     {gray}├ {purple}Port{bold}: {red}{output_port}
     {gray}│
+    {gray}├ {purple}Name{bold}: {orange}@{Important._Username}{end}
     {gray}├ {red}{message}
     {gray}│""")
 
             user_action = input(f"    {gray}╰─ {blink}{bold}• {end}")
             user_action_parsed = CommandParse(user_action)
+            if len(user_action_parsed) == 0:
+                continue
 
+            # Help command.
             if user_action_parsed[0] == "help":
                 message = "Commands: connect, resock, help, host, port, exit"
 
+            # Recreate socket.
             if user_action_parsed[0] == "resock":
-                Socket.close()
-                Socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                message = "Recreated socket."
+                RecreateSocket()
 
+            # Connect to server.
             if user_action_parsed[0] in ("connect", "conn", "c"):
                 PORT = output_port
                 HOST = output_host
-
-                # Connect to server.
+      
                 Connect(HOST, PORT)
                 Menus.Online()
+ 
 
+            # Exit.
             if user_action_parsed[0] == "exit":
                 Socket.close()
                 cls()
                 exit()
+            
+            # Change port.
+            if user_action_parsed[0] == "port":
+                try:
+                    output_port = int(user_action_parsed[1])
+                    Menus.Local_informationMessage = "Changed port."
+                except:
+                    Menus.Local_informationMessage = "Invalid port."
 
-    # Online
+            # Change host.
+            if user_action_parsed[0] == "host":
+                try:
+                    output_host = user_action_parsed[1]
+                    Menus.Local_informationMessage = "Changed host."
+                except:
+                    Menus.Local_informationMessage = "Invalid host."
+
+            # Change name.
+            if user_action_parsed[0] == "name":
+                try:
+                    Important._Username = user_action_parsed[1]
+                    Menus.Local_informationMessage = "Name changed."
+                except:
+                    Menus.Local_informationMessage = "Cannot change name."
+                  
     def Online():
         cls()
         if Important._Connected:
+            Messages.SendMessage(Messages.ToServer.silent_set_username+Important._Username)
             print(f"{green}Connected to server.{end}")
 
             while Important._Connected:
@@ -222,10 +337,10 @@ class Menus:
                 clearOneLine(user_input)
                 HandleInput(user_input)
      
-            else:
-                Socket.close()    
+        else:
+            RecreateSocket()
                 
 
 
-Menus.Main()
+Menus.Local()
     
