@@ -61,6 +61,7 @@ class Messages:
         ADMIN_server_address = ">client:server_address;"
         ADMIN_server_status = ">client:status;"
         ADMIN_initialize_hs = ">client:iniths;"
+        ADMIN_list_clients = ">client:lsusers;"
         
         
 
@@ -242,6 +243,10 @@ def HandleInput(user_input_STR):
         # Initialize hs process.
         if user_input[0] == ":iniths":
             Messages.SendMessage(Messages.ToServer.ADMIN_initialize_hs)
+
+        # List clients.
+        if user_input[0] == ":lsclients":
+            Messages.SendMessage(Messages.ToServer.ADMIN_list_clients)
 
     # Text message.
     else:

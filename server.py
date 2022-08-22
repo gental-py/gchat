@@ -48,10 +48,11 @@ SERVER.bind(ADDRESS)
 
 # Important informations.
 class Important:
-    disconnect_connection_index = None
-    clients_list = []
+    disconnect_connection_uid = None
+    clients_list = {}
     threads_list = []
     admin_count  = 0 
+    admins_uids_list = []
 
 
 # Clear screen function.
@@ -92,39 +93,37 @@ class Messages:
         ADMIN_server_address = ">client:server_address;"
         ADMIN_server_status = ">client:status;"
         ADMIN_initialize_hs = ">client:iniths;"
+        ADMIN_list_clients = ">client:lsusers;"
 
 
     def SendMessageToAllClients(message):
-        for idx, client in enumerate(Important.clients_list):
+        for client_uid in Important.clients_list:
             try:
-                client["connection"].send(f"{Messages.FromServer.user_message}{message}".encode())
+                Important.clients_list[client_uid]["connection"].send(f"{Messages.FromServer.user_message}{message}".encode())
             except Exception as error:
                 if "10054" not in str(error): print(f"{red}ERR {gray}│{end} {error}")
 
 
 # Client object.
 class Client:
-    def __init__(self, connection, address, username="guest"):
+    def __init__(self, connection, address, uid, username="guest"):
+        self.uid         = uid 
         self.address     = address
         self.username    = username
         self.is_admin    = False 
-        self.listIndex   = len(Important.clients_list)
         self.connection  = connection
         self.hsk_respond = False
         self.code_2fa    = ""
 
-        Important.clients_list.append({"obj": self, "username": username, "address": address, "connection": connection})
+        Important.clients_list.update({f"{self.uid}": {"obj": self, "username": username, "address": address, "connection": connection}})
+        
         try:
             self.connection.send(Messages.FromServer.connected.encode())
             self.connection.send(str(Messages.FromServer.welcome_message+f"{WELCOME_MESSAGE.replace('<username>', self.username).replace('<host>', self.address[0]).replace('<port>', str(self.address[1]))}").encode())
 
         except ConnectionResetError:
             print(f"{red}ERR {gray}│{end} {bold}{self.username}@{self.address}{end}: {red}ConnectionResetError{end}")
-            Client.kick()
-            Important.disconnect_connection_index = self.listIndex
-
-    def _refreshIndex(self):
-        self.listIndex = Important.clients_list.index({"obj": self, "username": self.username, "address": self.address, "connection": self.connection})
+            Client.kick(self)
 
     def handle(self):
         while True:
@@ -132,7 +131,7 @@ class Client:
             try:
                 message = self.connection.recv(Messages.HEADER).decode(Messages.FORMAT)
 
-            except Exception as error:
+            except Exception:
                 Client.kick(self)
                 return
 
@@ -156,7 +155,7 @@ class Client:
                         if message.startswith(Messages.ToServer.silent_set_username):
                             new_username = message.split("|")[1]
                             self.username = new_username
-                            Important.clients_list[self.listIndex]["username"] = new_username
+                            Important.clients_list[self.uid]["username"] = new_username
 
                         # == USER COMMANDS ==
 
@@ -175,7 +174,7 @@ class Client:
                         # Set username.
                         elif message.startswith(Messages.ToServer.set_username):
                             new_username  = message.replace(Messages.ToServer.set_username, "")
-                            Important.clients_list[self.listIndex]["username"] = new_username
+                            Important.clients_list[self.uid]["username"] = new_username
                             print(f"[{orange}r{end}] {gray}│{end} {bold}{self.username}{end} changed name to {bold}{new_username}{end}")
                             self.username = new_username
 
@@ -190,9 +189,11 @@ class Client:
 
                         # Admin degradation.
                         elif message.startswith(Messages.ToServer.user_degrad.replace(";", "")):
-                            self.is_admin = False
-                            Important.admin_count -= 1
-                            print(f"{purple}ADM {gray}│{end} {bold}{self.username}'s{end} {red}admin permissions has been removed.{end}")
+                            if self.is_admin: 
+                                self.is_admin = False
+                                Important.admin_count -= 1
+                                Important.admins_uids_list.remove(self.uid)
+                                print(f"{purple}ADM {gray}│{end} {bold}{self.username}'s{end} {red}admin permissions has been removed.{end}")
 
                         # Handshake.
                         elif message.startswith(Messages.ToServer.handshake.replace(";", "")):
@@ -217,13 +218,11 @@ class Client:
 
                             # Get informations.
                             threads_count = threading.active_count()-1
-                            threads_list_count = len(Important.threads_list)
                             clients_list_count = len(Important.clients_list)
                             admins_count = Important.admin_count
-                            th_list = threading.enumerate()
 
                             # Send informations.
-                            self.connection.send(f"--- Status ---\nActive threads: {threads_count}\nThreads on list: {threads_list_count}\nThreads list: {th_list}\nClients on list: {clients_list_count}\nAdmins count: {admins_count}\n--- Settings ---\nAdmins limit: {ADMINS_LIMIT}\nAdmin 2FA: {ADMIN_2FA}\nEnable colors: {ENABLE_COLORS}\nWelcome message: {WELCOME_MESSAGE}\nHandshaker enbaled: {HANDSHAKER_ENABLED}\nHandshaker timeout: {HANDSHAKER_TIMEOUT} seconds\nHandshaker respond time: {HANDSHAKER_RESPOND_TIME} seconds".encode())
+                            self.connection.send(f"--- Status ---\nActive threads: {threads_count}\nClients on list: {clients_list_count}\nAdmins count: {admins_count}\n--- Settings ---\nAdmins limit: {ADMINS_LIMIT}\nAdmin 2FA: {ADMIN_2FA}\nEnable colors: {ENABLE_COLORS}\nWelcome message: {WELCOME_MESSAGE}\nHandshaker enbaled: {HANDSHAKER_ENABLED}\nHandshaker timeout: {HANDSHAKER_TIMEOUT} seconds\nHandshaker respond time: {HANDSHAKER_RESPOND_TIME} seconds".encode())
 
                         # Manual handshake initalization.
                         elif message == Messages.ToServer.ADMIN_initialize_hs.replace(";", ""):
@@ -233,14 +232,29 @@ class Client:
 
                             HandshakeAuth.manualInit(self.username)
 
+                        # List users.
+                        elif message == Messages.ToServer.ADMIN_list_clients.replace(";", ""):
+                            if not self.is_admin:
+                                self.connection.send(Messages.FromServer.permissions_error.encode())
+                                continue
+
+                            ready_message = ""
+                            for client_uid in Important.clients_list:
+                                ready_message += f"{'$' if client_uid in Important.admins_uids_list else '@'}{Important.clients_list[client_uid]['username']} - {client_uid}\n"
+
+                            self.connection.send(ready_message.encode())
+
+
                         # Unknown message.
                         else:
                             self.connection.send(str(Messages.FromServer.unknown_command).encode())
 
     def kick(self):
-        if self.is_admin: Important.admin_count -= 1
+        if self.is_admin: 
+            Important.admin_count -= 1
+            Important.admins_uids_list.remove(self.uid)
         self.connection.close()
-        Important.disconnect_connection_index = self.listIndex
+        Important.disconnect_connection_uid = self.uid
 
     def handshake(self):
         try:
@@ -264,6 +278,7 @@ class Client:
                 print(f"{purple}ADM {gray}│{end} {bold}{self.username} {green}elevated to admin.{end}")
                 self.is_admin = True
                 Important.admin_count += 1
+                Important.admins_uids_list.append(self.uid)
                 self.connection.send(Messages.FromServer.elevate_success.encode())
 
             else:
@@ -293,6 +308,7 @@ class Client:
                     print(f"{purple}ADM {gray}│{end} {bold}{self.username} {green}elevated to admin.{end}")
                     self.is_admin = True
                     Important.admin_count += 1
+                    Important.admins_uids_list.append(self.uid)
                     self.connection.send(Messages.FromServer.elevate_success.encode())
                     self.code_2fa = ""
 
@@ -307,27 +323,25 @@ class Client:
             self.connection.send(Messages.FromServer.elevate_failed.encode())
 
 
-
-# Refresh self.listIndex in all clients.
-def RefreshAllIndexes():
-    for client in Important.clients_list:  client["obj"]._refreshIndex()
+# Generate UID.
+def generateUID():
+    uid = ""
+    for _ in range(16): uid += str(random.randint(0,9))
+    return uid  
 
 
 # Delete disconnected clients.
 def ConnectionDeleter():
     while True:
-        if Important.disconnect_connection_index is not None:
+        if Important.disconnect_connection_uid is not None:
 
             try:
 
                 # Delete client object
-                del Important.clients_list[Important.disconnect_connection_index]["obj"]
-                Important.clients_list.pop(Important.disconnect_connection_index)
-                Important.disconnect_connection_index = None
+                del Important.clients_list[Important.disconnect_connection_uid]["obj"]
+                Important.clients_list.pop(Important.disconnect_connection_uid)
+                Important.disconnect_connection_uid = None
 
-
-                # Refresh indexes for all clients objects.
-                RefreshAllIndexes()
             except:
                 pass
             
@@ -348,15 +362,15 @@ class HandshakeAuth:
             return
 
         print(f"{green}HSK {gray}│{end} Handshake process started in all clients.")
-        for idx, client in enumerate(Important.clients_list):
+        for client_uid in Important.clients_list:
             try:
-                client["obj"].handshake()
+                Important.clients_list[client_uid]["obj"].handshake()
 
             except Exception as error:
-                print(f"{green}HSK {gray}│{end} {bold}@{client['username']}:{end}{red} Cannot send handshake to client: {end}{error}")
-                client['obj'].kick()
-                del Important.clients_list[idx]["obj"]
-                Important.clients_list.pop(idx)
+                print(f"{green}HSK {gray}│{end} {bold}@{Important.clients_list[client_uid]['username']}:{end}{red} Cannot send handshake to client: {end}{error}")
+                Important.clients_list[client_uid]['obj'].kick()
+                del Important.clients_list[client_uid]["obj"]
+                Important.clients_list.pop(client_uid)
 
 
    
@@ -369,7 +383,8 @@ def StartConnection():
 
     while True:
         conn, addr = SERVER.accept()
-        client_object = Client(conn, addr)
+        _uid = generateUID()
+        client_object = Client(conn, addr, _uid)
         ClientHandler = threading.Thread(target=client_object.handle, daemon=True)
         ClientHandler.start()
         print(f"[{green}+{end}] {gray}│{end} <{bold}{addr[0]}:{addr[1]}{end}> {green}Connected to server.{end} | {purple}{len(Important.clients_list)}{end}")
