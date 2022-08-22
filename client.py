@@ -28,10 +28,10 @@ def OutputMesssage(message): print(message)
 class Messages:
     HEADER = 2048
     FORMAT = "utf-8"
+    _welcome_message = ""
     _MessageReceived = False
 
-    #TODO: command: permission: respond: amdin/user
-    class  FromServer:
+    class FromServer:
         message_received = "<server:message_received;"
         unknown_command = "<server:unknown_command;"
         user_message = "<server:user_message|"
@@ -40,20 +40,34 @@ class Messages:
         elevate_success = "<server:elevate_succes;"
         elevate_failed = "<server:elevate_failed;" 
         user_degrad = "<server:degrad;"
+        welcome_message = "<server:welcome_msg|"
+
+        # Errors.
+        admins_limit_error = "<server:admins_limit_error;"
+        permissions_error = "<server:permissions_error;"
 
     class ToServer:
+        # Users commands.
         silent_set_username = ">client:silent_username|"
         text_message = ">client:text_message|" 
         disconnect = ">client:disconnect"
         set_username = ">client:username|"
         handshake = ">client:handshake;"
         elevate = ">client:elevate|"
-        user_degrad = "<server:degrad;"
+        user_degrad = ">client:degrad;"
+        code_2fa = ">client:2fa|"
 
+        # Admin commands.
+        ADMIN_server_address = ">client:server_address;"
+        ADMIN_server_status = ">client:status;"
+        ADMIN_initialize_hs = ">client:iniths;"
+        
+        
 
     def SendMessage(msg):
         try:
             Socket.sendall(bytes(msg, Messages.FORMAT))
+
         except ConnectionResetError:
             print(f"{red}SERVER CLOSED!{end}") 
             Menus.Local_informationMessage = "Server has been closed."
@@ -62,7 +76,7 @@ class Messages:
 
 
 
-# Server listener.
+# Server's messages listener.
 def ServerMsgListener():
     global Socket
     while True:
@@ -76,6 +90,7 @@ def ServerMsgListener():
             print(f"{red}[rcv] SERVER CLOSED!{end}") 
             Menus.Local_informationMessage = "Server has been closed."
             Important._Connected = False
+            RecreateSocket()
             return
             
 
@@ -95,6 +110,10 @@ def ServerMsgListener():
                     if command == Messages.FromServer.connected.replace(";", ""):
                         Important._Connected = True
 
+                    # Welcome message set.
+                    if command.startswith(Messages.FromServer.welcome_message):
+                        Messages._welcome_message = command.split("|")[1]
+
                     # Message received confirmation.
                     if command == Messages.FromServer.message_received:
                         Messages._MessageReceived = True
@@ -105,17 +124,21 @@ def ServerMsgListener():
 
                     # Elevate to admin respond : FAILED.
                     if command == Messages.FromServer.elevate_failed.replace(";", ""):
-                        OutputMesssage(f"{red}Bad admin password.{end}")
+                        OutputMesssage(f"{red}Incorrect admin password.{end}")
 
                     # Elevate to admin respond : SUCCES.
                     if command == Messages.FromServer.elevate_success.replace(";", ""):
-                        OutputMesssage(f"{green}You are now admin.{end} (Use ':' prefix for admin commands)")
+                        OutputMesssage(f"{green}You are now admin.{end}")
                         Important._Prefix = "$"
 
                     # Permissions degradation.
                     if command == Messages.FromServer.user_degrad:
                         OutputMesssage(f"{red}You are not administrator anymore.{end}")
                         Important._Prefix = "@"
+
+                    # Admin limit reached error.
+                    if command == Messages.FromServer.admins_limit_error:
+                        OutputMesssage(f"{red} There is maximum amount of admin's.{end}")
 
                     # Another user message.
                     if command.startswith(Messages.FromServer.user_message):
@@ -128,6 +151,7 @@ def ServerMsgListener():
                         message = content[0]
                         username = content[1]
                         OutputMesssage(f"{prefix}{purple}{username}{bold}: {blue}{message}{end}")
+
 
                 # Server text message.
                 else:
@@ -177,6 +201,18 @@ def HandleInput(user_input_STR):
 
             Messages.SendMessage(Messages.ToServer.elevate+user_input[1])
 
+        # 2FA code respond.
+        if user_input[0] == "/2facode":
+            if Important._Prefix == "$":
+                print(f"{red}Error:{end} You are already admin!")
+                return
+
+            if len(user_input) != 2:
+                print(f"{red}Error:{end} Command <2facode> requires exactly 1 parameter: code.")
+                return
+
+            Messages.SendMessage(Messages.ToServer.code_2fa+user_input[1])
+
 
     # Admin commands.
     elif user_input_STR.startswith(":"):
@@ -195,6 +231,17 @@ def HandleInput(user_input_STR):
             Messages.SendMessage(Messages.ToServer.user_degrad)
             print(f"{orange}You are not admin anymore.{end}")
 
+        # Get server address.
+        if user_input[0] == ":address":
+            Messages.SendMessage(Messages.ToServer.ADMIN_server_address)
+
+        # Get objects info.
+        if user_input[0] == ":status":
+           Messages.SendMessage(Messages.ToServer.ADMIN_server_status)
+
+        # Initialize hs process.
+        if user_input[0] == ":iniths":
+            Messages.SendMessage(Messages.ToServer.ADMIN_initialize_hs)
 
     # Text message.
     else:
@@ -331,6 +378,8 @@ class Menus:
         if Important._Connected:
             Messages.SendMessage(Messages.ToServer.silent_set_username+Important._Username)
             print(f"{green}Connected to server.{end}")
+            print(f"{bold}{Messages._welcome_message}{end}")
+
 
             while Important._Connected:
                 user_input = input("").replace("|", "")
